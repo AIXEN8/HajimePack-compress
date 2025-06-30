@@ -1,1 +1,1 @@
-# HajimePack-compress
+# HajimePack compress
