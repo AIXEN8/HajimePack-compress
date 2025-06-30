@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hajime Pack - File Processor</title>
+
+    <!-- 1. Load Tailwind CSS Play CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 2. Load React Libraries -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+
+    <!-- 3. Load Babel to transpile JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- 4. Our React code goes inside a script tag with type="text/babel" -->
+    <script type="text/babel">
+      const { useState, useRef, useEffect } = React;
+      // Main App Component
+      const App = () => {
+        const [selectedFile, setSelectedFile] = useState(null);
+        const [processedFile, setProcessedFile] = useState(null); // Renamed from compressedFile
+        const [originalSize, setOriginalSize] = useState(0);
+        const [processedSize, setProcessedSize] = useState(0); // Renamed from compressedSize
+        const [compressionQuality, setCompressionQuality] = useState("medium");
+        const [isLoading, setIsLoading] = useState(false);
+        const [error, setError] = useState("");
+        const [activeTab, setActiveTab] = useState("compress"); // 'compress' or 'manual'
+        const [selectedAction, setSelectedAction] = useState("compress"); // New state: 'compress', 'imageToPdf', 'wordToPdf'
+
+        const fileInputRef = useRef(null);
+
+        // Load jsPDF library dynamically for client-side Image to PDF conversion
+        useEffect(() => {
+          const script = document.createElement("script");
+          script.src =
+            "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+          script.async = true;
+          document.body.appendChild(script);
+
+          return () => {
+            document.body.removeChild(script);
+          };
+        }, []);
+
+        // Function to handle file selection
+        const handleFileChange = (event) => {
+          const file = event.target.files[0];
+          if (file) {
+            setSelectedFile(file);
+            setOriginalSize(file.size);
+            setProcessedFile(null);
+            setProcessedSize(0);
+            setError("");
+            // Set default action based on file type
+            if (file.type.startsWith("image/")) {
+              setSelectedAction("compress"); // Default to compress image
+            } else if (file.type === "application/pdf") {
+              setSelectedAction("compress"); // Default to compress PDF
+            } else if (
+              file.type === "application/msword" ||
+              file.type ===
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ) {
+              setSelectedAction("wordToPdf"); // Default to convert Word to PDF
+            } else {
+              setSelectedAction("compress"); // Default for others (audio, video, generic docs)
+            }
+          }
+        };
+
+        // Function to handle drag over event
+        const handleDragOver = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        };
+
+        // Function to handle file drop event
+        const handleDrop = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const file = event.dataTransfer.files[0];
+          if (file) {
+            setSelectedFile(file);
+            setOriginalSize(file.size);
+            setProcessedFile(null);
+            setProcessedSize(0);
+            setError("");
+            // Set default action based on file type
+            if (file.type.startsWith("image/")) {
+              setSelectedAction("compress");
+            } else if (file.type === "application/pdf") {
+              setSelectedAction("compress");
+            } else if (
+              file.type === "application/msword" ||
+              file.type ===
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ) {
+              setSelectedAction("wordToPdf");
+            } else {
+              setSelectedAction("compress");
+            }
+          }
+        };
+
+        // Function to format file size for display
+        const formatBytes = (bytes, decimals = 2) => {
+          if (bytes === 0) return "0 Bytes";
+          const k = 1024;
+          const dm = decimals < 0 ? 0 : decimals;
+          const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          return (
+            parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i]
+          );
+        };
+
+        // Function to perform Image to PDF conversion using jsPDF
+        const convertImageToPdf = (fileData, fileName) => {
+          return new Promise((resolve, reject) => {
+            // Check if jsPDF library is loaded
+            if (
+              typeof window.jspdf === "undefined" ||
+              typeof window.jspdf.jsPDF === "undefined"
+            ) {
+              reject(
+                new Error(
+                  "jsPDF library not loaded. Please try again or refresh the page."
+                )
+              );
+              return;
+            }
+            const { jsPDF } = window.jspdf;
+            const img = new Image();
+            img.src = fileData;
+            img.onload = () => {
+              const imgWidth = img.width;
+              const imgHeight = img.height;
+
+              // Create a new PDF document with dimensions matching the image
+              const orientation = imgWidth > imgHeight ? "l" : "p"; // Landscape or Portrait
+              const doc = new jsPDF(orientation, "px", [imgWidth, imgHeight]);
+
+              // Add image to PDF. Using 'JPEG' as format for broader compatibility.
+              doc.addImage(fileData, "JPEG", 0, 0, imgWidth, imgHeight);
+              const pdfBlob = doc.output("blob");
+              const pdfFileName = `${fileName
+                .split(".")
+                .slice(0, -1)
+                .join(".")}.pdf`; // Change extension to .pdf
+              const pdfFile = new File([pdfBlob], pdfFileName, {
+                type: "application/pdf",
+              });
+              resolve(pdfFile);
+            };
+            img.onerror = () => {
+              reject(
+                new Error(
+                  "Gagal memuat gambar untuk konversi PDF. Pastikan file gambar valid."
+                )
+              );
+            };
+          });
+        };
+
+        // Function to handle file processing (compression or conversion)
+        const handleProcessFile = async () => {
+          if (!selectedFile) {
+            setError("Pilih file terlebih dahulu!");
+            return;
+          }
+
+          setIsLoading(true);
+          setError("");
+          setProcessedFile(null);
+          setProcessedSize(0);
+
+          const fileType = selectedFile.type;
+          const reader = new FileReader();
+
+          reader.onload = async (e) => {
+            const fileData = e.target.result; // Data URL for images, ArrayBuffer for others
+
+            try {
+              let finalFile = null;
+              let finalSize = 0;
+
+              if (
+                selectedAction === "imageToPdf" &&
+                fileType.startsWith("image/")
+              ) {
+                // Perform Image to PDF conversion
+                finalFile = await convertImageToPdf(
+                  fileData,
+                  selectedFile.name
+                );
+                finalSize = finalFile.size;
+              } else if (
+                selectedAction === "wordToPdf" &&
+                (fileType === "application/msword" ||
+                  fileType ===
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+              ) {
+                // Simulate Word to PDF conversion
+                // Real Word to PDF conversion is complex and typically requires server-side processing.
+                // Here, we simulate a size reduction and inform the user.
+                const reductionFactor = 0.8; // Simulate 20% reduction
+                finalSize = Math.floor(selectedFile.size * reductionFactor);
+                // For demonstration, we'll still allow downloading the original Word file,
+                // but present it as a "converted" file with a simulated size.
+                finalFile = new File(
+                  [selectedFile],
+                  `${selectedFile.name.split(".").slice(0, -1).join(".")}.pdf`,
+                  { type: "application/pdf" }
+                );
+                console.warn(
+                  "Konversi Word ke PDF disimulasikan. Untuk konversi sebenarnya, diperlukan pemrosesan sisi server."
+                );
+              } else if (selectedAction === "compress") {
+                if (fileType.startsWith("image/")) {
+                  // Image compression (client-side resizing)
+                  const img = new Image();
+                  img.src = fileData;
+                  await new Promise((resolve, reject) => {
+                    img.onload = () => {
+                      const canvas = document.createElement("canvas");
+                      const ctx = canvas.getContext("2d");
+
+                      let width = img.width;
+                      let height = img.height;
+                      let qualityFactor = 0.8; // Default quality
+
+                      switch (compressionQuality) {
+                        case "low":
+                          width *= 0.5;
+                          height *= 0.5;
+                          qualityFactor = 0.6;
+                          break;
+                        case "medium":
+                          width *= 0.75;
+                          height *= 0.75;
+                          qualityFactor = 0.8;
+                          break;
+                        case "high":
+                          width *= 0.9;
+                          height *= 0.9;
+                          qualityFactor = 0.9;
+                          break;
+                        default:
+                          break;
+                      }
+
+                      canvas.width = width;
+                      canvas.height = height;
+                      ctx.drawImage(img, 0, 0, width, height);
+
+                      canvas.toBlob(
+                        (blob) => {
+                          if (blob) {
+                            const processedFileName = `compressed_${selectedFile.name}`;
+                            finalFile = new File([blob], processedFileName, {
+                              type: fileType,
+                            });
+                            finalSize = blob.size;
+                            resolve();
+                          } else {
+                            reject(new Error("Gagal mengompres gambar."));
+                          }
+                        },
+                        fileType,
+                        qualityFactor
+                      );
+                    };
+                    img.onerror = () => {
+                      reject(new Error("Gagal memuat gambar."));
+                    };
+                  });
+                } else {
+                  // Simulate compression for audio, video, documents (including PDF)
+                  let reductionFactor = 0.8; // 20% reduction for medium
+                  switch (compressionQuality) {
+                    case "low":
+                      reductionFactor = 0.6; // 40% reduction
+                      break;
+                    case "medium":
+                      reductionFactor = 0.8; // 20% reduction
+                      break;
+                    case "high":
+                      reductionFactor = 0.95; // 5% reduction
+                      break;
+                    default:
+                      break;
+                  }
+                  finalSize = Math.floor(selectedFile.size * reductionFactor);
+                  finalFile = selectedFile; // For non-image, we just allow downloading original
+                  console.warn(
+                    "Kompresi untuk file ini disimulasikan. Untuk kompresi sebenarnya, diperlukan pemrosesan sisi server."
+                  );
+                }
+              } else {
+                setError("Aksi tidak valid untuk jenis file ini.");
+                setIsLoading(false);
+                return;
+              }
+
+              setProcessedFile(finalFile);
+              setProcessedSize(finalSize);
+            } catch (err) {
+              setError(
+                err.message || "Terjadi kesalahan selama pemrosesan file."
+              );
+              console.error(err);
+            } finally {
+              setIsLoading(false);
+            }
+          };
+
+          // Read file based on action and type
+          if (
+            selectedAction === "imageToPdf" &&
+            fileType.startsWith("image/")
+          ) {
+            reader.readAsDataURL(selectedFile); // For image to PDF conversion
+          } else if (
+            selectedAction === "compress" &&
+            fileType.startsWith("image/")
+          ) {
+            reader.readAsDataURL(selectedFile); // For image compression
+          } else {
+            reader.readAsArrayBuffer(selectedFile); // For other types (Word, PDF, audio, video)
+          }
+        };
+
+        // Function to handle download of processed file
+        const handleDownload = () => {
+          if (processedFile) {
+            const url = URL.createObjectURL(processedFile);
+            const a = document.createElement("a");
+            a.href = url;
+            let downloadFileName = `hajime_pack_${processedFile.name}`;
+
+            // Adjust filename for converted PDFs
+            if (
+              selectedAction === "imageToPdf" &&
+              selectedFile.type.startsWith("image/")
+            ) {
+              downloadFileName = `hajime_pack_${selectedFile.name
+                .split(".")
+                .slice(0, -1)
+                .join(".")}.pdf`;
+            } else if (
+              selectedAction === "wordToPdf" &&
+              (selectedFile.type === "application/msword" ||
+                selectedFile.type ===
+                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            ) {
+              downloadFileName = `hajime_pack_${selectedFile.name
+                .split(".")
+                .slice(0, -1)
+                .join(".")}.pdf`;
+            }
+            a.download = downloadFileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }
+        };
+
+        // Manual Book Content
+        const ManualBookContent = () => (
+          <div className="p-6 text-black">
+            <h2 className="text-3xl font-bold mb-6 text-center text-blue-800">
+              Panduan Penggunaan Hajime Pack
+            </h2>
+
+            <section className="mb-8">
+              <h3 className="text-2xl font-semibold mb-3 text-blue-700">
+                1. Pendahuluan
+              </h3>
+              <p className="mb-2">
+                Selamat datang di Hajime Pack, solusi kompresi dan konversi file
+                all-in-one Anda! Aplikasi ini dirancang untuk membantu Anda
+                mengurangi ukuran file suara, video, foto, dan dokumen, serta
+                mengkonversi gambar dan dokumen Word ke format PDF dengan mudah
+                dan cepat. Nikmati pengalaman yang mulus dengan antarmuka yang
+                bersih dan intuitif.
+              </p>
+            </section>
+
+            <section className="mb-8">
+              <h3 className="text-2xl font-semibold mb-3 text-blue-700">
+                2. Cara Menggunakan
+              </h3>
+              <ol className="list-decimal list-inside space-y-3">
+                <li>
+                  <span className="font-medium">
+                    Pilih Tab "Kompres & Konversi File":
+                  </span>{" "}
+                  Pastikan Anda berada di tab yang benar di bagian atas halaman.
+                </li>
+                <li>
+                  <span className="font-medium">Unggah File Anda:</span>
+                  <ul className="list-disc list-inside ml-5 mt-1">
+                    <li>
+                      <span className="font-normal">Seret & Lepas:</span> Anda
+                      dapat menyeret file langsung ke area "Seret & Lepas File
+                      Anda di Sini".
+                    </li>
+                    <li>
+                      <span className="font-normal">Klik untuk Memilih:</span>{" "}
+                      Atau, klik area tersebut untuk membuka jendela penjelajah
+                      file dan pilih file yang ingin Anda proses.
+                    </li>
+                  </ul>
+                </li>
+                <li>
+                  <span className="font-medium">
+                    Pilih Aksi (Kompresi atau Konversi):
+                  </span>{" "}
+                  Setelah file diunggah, Anda akan melihat opsi "Pilih Aksi".
+                  <ul className="list-disc list-inside ml-5 mt-1">
+                    <li>
+                      <span className="font-normal">Kompresi:</span> Untuk
+                      mengurangi ukuran file gambar, audio, video, dan dokumen
+                      (termasuk PDF).
+                    </li>
+                    <li>
+                      <span className="font-normal">
+                        Konversi Gambar ke PDF:
+                      </span>{" "}
+                      Untuk mengubah file gambar menjadi dokumen PDF.
+                    </li>
+                    <li>
+                      <span className="font-normal">Konversi Word ke PDF:</span>{" "}
+                      Untuk mengubah dokumen Microsoft Word menjadi PDF.
+                    </li>
+                  </ul>
+                </li>
+                <li>
+                  <span className="font-medium">
+                    Pilih Kualitas Kompresi (jika relevan):
+                  </span>{" "}
+                  Jika Anda memilih aksi "Kompresi" untuk gambar atau PDF, Anda
+                  akan melihat opsi "Kualitas Kompresi". Pilih salah satu dari
+                  pilihan berikut:
+                  <ul className="list-disc list-inside ml-5 mt-1">
+                    <li>
+                      <span className="font-normal">Rendah:</span> Kompresi
+                      maksimum, ukuran file terkecil, namun kualitas mungkin
+                      menurun signifikan (terutama untuk gambar).
+                    </li>
+                    <li>
+                      <span className="font-normal">Sedang:</span> Keseimbangan
+                      antara ukuran file dan kualitas. Direkomendasikan untuk
+                      sebagian besar kasus.
+                    </li>
+                    <li>
+                      <span className="font-normal">Tinggi:</span> Kompresi
+                      minimal, ukuran file sedikit lebih kecil, kualitas hampir
+                      tidak berubah.
+                    </li>
+                  </ul>
+                </li>
+                <li>
+                  <span className="font-medium">Mulai Proses:</span> Klik tombol
+                  "Proses File". Proses akan dimulai. Harap tunggu hingga
+                  selesai.
+                </li>
+                <li>
+                  <span className="font-medium">Unduh File Hasil:</span> Setelah
+                  proses selesai, Anda akan melihat informasi ukuran file asli
+                  dan hasil proses. Klik tombol "Unduh File" untuk menyimpan
+                  file yang telah diproses ke perangkat Anda.
+                </li>
+              </ol>
+            </section>
+
+            <section className="mb-8">
+              <h3 className="text-2xl font-semibold mb-3 text-blue-700">
+                3. Jenis File yang Didukung
+              </h3>
+              <ul className="list-disc list-inside space-y-2">
+                <li>
+                  <span className="font-medium">
+                    Gambar (untuk Kompresi & Konversi ke PDF):
+                  </span>{" "}
+                  JPG, PNG, WEBP, GIF.
+                </li>
+                <li>
+                  <span className="font-medium">Audio (untuk Kompresi):</span>{" "}
+                  MP3, WAV, FLAC (kompresi disimulasikan).
+                </li>
+                <li>
+                  <span className="font-medium">Video (untuk Kompresi):</span>{" "}
+                  MP4, AVI, MKV (kompresi disimulasikan).
+                </li>
+                <li>
+                  <span className="font-medium">Dokumen (untuk Kompresi):</span>{" "}
+                  PDF, DOCX, XLSX, TXT (kompresi disimulasikan).
+                </li>
+                <li>
+                  <span className="font-medium">
+                    Microsoft Word (untuk Konversi ke PDF):
+                  </span>{" "}
+                  DOC, DOCX (konversi disimulasikan).
+                </li>
+              </ul>
+              <p className="mt-2 text-sm text-gray-600">
+                <span className="font-bold">Catatan Penting:</span>
+                <ul className="list-disc list-inside ml-5 mt-1">
+                  <li>
+                    Untuk file audio, video, dan dokumen (termasuk PDF),
+                    kompresi dan konversi Word ke PDF hanya mensimulasikan
+                    pengurangan ukuran file di sisi klien. Kompresi/konversi
+                    sebenarnya untuk jenis file ini biasanya memerlukan
+                    pemrosesan sisi server yang lebih kompleks.
+                  </li>
+                  <li>
+                    Konversi Gambar ke PDF dilakukan secara real-time di browser
+                    Anda.
+                  </li>
+                </ul>
+              </p>
+            </section>
+
+            <section className="mb-8">
+              <h3 className="text-2xl font-semibold mb-3 text-blue-700">
+                4. Tips & Pemecahan Masalah
+              </h3>
+              <ul className="list-disc list-inside space-y-2">
+                <li>
+                  Jika proses memakan waktu terlalu lama, coba kurangi ukuran
+                  file asli atau pilih kualitas kompresi yang lebih rendah.
+                </li>
+                <li>
+                  Pastikan koneksi internet Anda stabil saat mengunggah dan
+                  mengunduh file.
+                </li>
+                <li>
+                  Jika Anda mengalami masalah, coba segarkan halaman dan ulangi
+                  prosesnya.
+                </li>
+              </ul>
+            </section>
+
+            <section>
+              <p className="text-center text-gray-700 italic">
+                Terima kasih telah menggunakan Hajime Pack!
+              </p>
+            </section>
+          </div>
+        );
+
+        return (
+          <div className="min-h-screen bg-blue-800 font-sans flex flex-col items-center justify-center p-4">
+            <style>
+              {`
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+                body {
+                    font-family: 'Inter', sans-serif;
+                }
+                `}
+            </style>
+            <div className="w-full max-w-4xl bg-white rounded-xl shadow-2xl overflow-hidden mb-8">
+              {/* Header */}
+              <div className="bg-blue-900 text-white p-6 rounded-t-xl flex justify-between items-center">
+                <h1 className="text-4xl font-extrabold tracking-wide">
+                  Hajime Pack
+                </h1>
+                <div className="flex space-x-4">
+                  <button
+                    onClick={() => setActiveTab("compress")}
+                    className={`px-5 py-2 rounded-full font-semibold transition-all duration-300
+                                ${
+                                  activeTab === "compress"
+                                    ? "bg-white text-blue-900 shadow-md"
+                                    : "text-white hover:bg-blue-700"
+                                }`}
+                  >
+                    Kompres & Konversi File
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("manual")}
+                    className={`px-5 py-2 rounded-full font-semibold transition-all duration-300
+                                ${
+                                  activeTab === "manual"
+                                    ? "bg-white text-blue-900 shadow-md"
+                                    : "text-white hover:bg-blue-700"
+                                }`}
+                  >
+                    Manual Book
+                  </button>
+                </div>
+              </div>
+
+              {/* Content Area */}
+              {activeTab === "compress" ? (
+                <div className="p-8">
+                  <h2 className="text-3xl font-bold text-center text-blue-800 mb-8">
+                    Proses File Anda dengan Mudah!
+                  </h2>
+
+                  {/* File Upload Area */}
+                  <div
+                    className="border-4 border-dashed border-blue-400 rounded-2xl p-12 text-center cursor-pointer hover:border-blue-600 transition-colors duration-300 mb-8"
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                    onClick={() =>
+                      fileInputRef.current && fileInputRef.current.click()
+                    }
+                  >
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleFileChange}
+                      className="hidden"
+                      // Updated accept attribute to include Word documents
+                      accept="image/*,audio/*,video/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain"
+                    />
+                    <p className="text-gray-600 text-lg font-medium mb-2">
+                      Seret & Lepas File Anda di Sini
+                    </p>
+                    <p className="text-blue-500 text-xl font-bold">
+                      atau Klik untuk Memilih
+                    </p>
+                    <svg
+                      className="mx-auto mt-4 w-16 h-16 text-blue-300"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                      ></path>
+                    </svg>
+                  </div>
+
+                  {error && (
+                    <div
+                      className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-6"
+                      role="alert"
+                    >
+                      <strong className="font-bold">Error!</strong>
+                      <span className="block sm:inline ml-2">{error}</span>
+                    </div>
+                  )}
+
+                  {selectedFile && (
+                    <div className="bg-blue-50 p-6 rounded-xl shadow-inner mb-8">
+                      <h3 className="text-xl font-semibold text-blue-800 mb-4">
+                        Detail File:
+                      </h3>
+                      <p className="text-gray-700 mb-2">
+                        <span className="font-medium">Nama File:</span>{" "}
+                        {selectedFile.name}
+                      </p>
+                      <p className="text-gray-700 mb-2">
+                        <span className="font-medium">Ukuran Asli:</span>{" "}
+                        {formatBytes(originalSize)}
+                      </p>
+
+                      {/* Action Selector (Kompresi, Konversi Gambar ke PDF, Konversi Word ke PDF) */}
+                      <div className="mt-4 mb-6">
+                        <label
+                          htmlFor="action"
+                          className="block text-gray-700 text-lg font-medium mb-2"
+                        >
+                          Pilih Aksi:
+                        </label>
+                        <select
+                          id="action"
+                          value={selectedAction}
+                          onChange={(e) => setSelectedAction(e.target.value)}
+                          className="block w-full md:w-1/2 p-3 border border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-white text-gray-800"
+                        >
+                          <option value="compress">Kompresi</option>
+                          {selectedFile.type.startsWith("image/") && (
+                            <option value="imageToPdf">
+                              Konversi Gambar ke PDF
+                            </option>
+                          )}
+                          {(selectedFile.type === "application/msword" ||
+                            selectedFile.type ===
+                              "application/vnd.openxmlformats-officedocument.wordprocessingml.document") && (
+                            <option value="wordToPdf">
+                              Konversi Word ke PDF
+                            </option>
+                          )}
+                        </select>
+                      </div>
+
+                      {/* Compression Quality Selector (only visible for 'compress' action) */}
+                      {selectedAction === "compress" && (
+                        <div className="mt-4 mb-6">
+                          <label
+                            htmlFor="quality"
+                            className="block text-gray-700 text-lg font-medium mb-2"
+                          >
+                            Kualitas Kompresi:
+                          </label>
+                          <select
+                            id="quality"
+                            value={compressionQuality}
+                            onChange={(e) =>
+                              setCompressionQuality(e.target.value)
+                            }
+                            className="block w-full md:w-1/2 p-3 border border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-white text-gray-800"
+                          >
+                            <option value="low">
+                              Rendah (Ukuran Terkecil)
+                            </option>
+                            <option value="medium">
+                              Sedang (Keseimbangan)
+                            </option>
+                            <option value="high">
+                              Tinggi (Kualitas Terbaik)
+                            </option>
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Process Button */}
+                      <button
+                        onClick={handleProcessFile}
+                        disabled={isLoading}
+                        className="w-full bg-blue-600 text-white py-3 px-6 rounded-xl text-xl font-bold hover:bg-blue-700 transition-all duration-300 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                      >
+                        {isLoading ? (
+                          <React.Fragment>
+                            <svg
+                              className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
+                              xmlns="http://www.w3.org/2000/svg"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              ></circle>
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                              ></path>
+                            </svg>
+                            Memproses...
+                          </React.Fragment>
+                        ) : (
+                          "Proses File"
+                        )}
+                      </button>
+                    </div>
+                  )}
+
+                  {processedFile && processedSize > 0 && (
+                    <div className="bg-green-50 p-6 rounded-xl shadow-inner mt-8">
+                      <h3 className="text-xl font-semibold text-green-800 mb-4">
+                        Proses Selesai!
+                      </h3>
+                      <p className="text-gray-700 mb-2">
+                        <span className="font-medium">Ukuran Hasil:</span>{" "}
+                        {formatBytes(processedSize)}
+                      </p>
+                      {/* Display original size for conversions, or saving for compressions */}
+                      {selectedAction === "compress" && (
+                        <p className="text-gray-700 mb-4">
+                          <span className="font-medium">Penghematan:</span>{" "}
+                          {(
+                            ((originalSize - processedSize) / originalSize) *
+                            100
+                          ).toFixed(2)}
+                          %
+                        </p>
+                      )}
+                      <button
+                        onClick={handleDownload}
+                        className="w-full bg-green-600 text-white py-3 px-6 rounded-xl text-xl font-bold hover:bg-green-700 transition-all duration-300 shadow-lg"
+                      >
+                        Unduh File
+                      </button>
+                      {/* Note for simulated processes */}
+                      {(selectedAction === "compress" &&
+                        !selectedFile.type.startsWith("image/")) ||
+                      selectedAction === "wordToPdf" ? (
+                        <p className="mt-4 text-sm text-gray-600 text-center">
+                          <span className="font-bold">Catatan:</span> Ukuran
+                          yang ditampilkan adalah simulasi. File yang diunduh
+                          adalah file asli Anda (untuk kompresi) atau konversi
+                          yang disimulasikan (untuk Word ke PDF).
+                        </p>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <ManualBookContent />
+              )}
+            </div>
+            <footer className="text-white text-sm mt-8 opacity-80">
+              &copy; {new Date().getFullYear()} Hajime Pack. Hak Cipta
+              Dilindungi.
+            </footer>
+          </div>
+        );
+      };
+
+      ReactDOM.render(<App />, document.getElementById("root"));
+    </script>
+  </body>
+</html>
